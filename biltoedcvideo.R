@@ -7,55 +7,76 @@ library(RMariaDB)
 library(DBI)
 library(colorfindr)
 library(logr)
+library(xml2)
+
+# Selenium-server running in Docker-container
+remDr <- RSelenium::remoteDriver(remoteServerAddr = "localhost",port=4445)
+remDr$open()
 
 # create database connection
-
 condb <- dbConnect(MariaDB(),
-                   db="mybilbasen",
+                   db="edc",
                    host="localhost",
                    port=3306,
                    user="root",
                    password="root123")
 
 # logfile
-tmp <- file.path(tempdir(),"bb.log")
+fn <- paste0("edclog_",as.numeric(Sys.time()),".log")
+tmp <- file.path("/Users/thor/Git/edc",fn)
 lf <- log_open(tmp)
+log_print("Start")
 
 # links
 x <- scan("linkstoedc", what="", sep="\n")
-ll <- list(x)
+#ll <- list(x)
 #selenium-stuff
-startlink <- 'https://www.edc.dk/sog/?ejd-typer=1'
-rD <- rsDriver(port = 4539L, browser = c('firefox'))
-rclient <- rD[['client']]
-rclient$navigate(startlink)
-rclient$navigate("https://www.edc.dk")
-rclient$navigate(x[1])
+#startlink <- 'https://www.edc.dk/sog/?ejd-typer=1'
+#rD <- rsDriver(port = 4539L, browser = c('firefox'))
+#rclient <- rD[['client']]
+remDr$navigate(x[1])
+#shadow_rd <- shadow(remDr) 
+#element <- find_elements(shadow_rd,'button')
+
+# TEST ANOTHER SITE
+#myurl <- remDr$navigate("https://myterminal.ect.nl/app/object-schedule")
+#myrul <- 'https://sts.ect.nl/Account/Login?ReturnUrl=%2Fconnect%2Fauthorize%2Fcallback%3Fclient_id%3D463CCD95-88AA-4CF1-90D7-00F145B0F291%26redirect_uri%3Dhttps%253A%252F%252Fmyterminal.ect.nl%252Fapp%252Fcallback%26response_type%3Did_token%2520token%26scope%3Dopenid%2520profile%2520email%2520ProfilesWebAPI.Profile%2520MyTerminalAPI%2520truckvisitapi%26state%3D19b6e43843474ca58f15c3ed0761ba01%26nonce%3D14319b7925fe441d9082877016f1fcd5'
+#remDr$navigate(myurl)
+#shadow_rd <- shadow(remDr) 
+#element <- find_elements(shadow_rd, 'button[class="_ect-button"]')[[5]]
+#element$getElementText()[[1]] #to preview the element we found
+
 #houspsource <- rclient$getPageSource()
+# handle cookie
+#webElem <- remDr$findElement(using = "class", "desktop")
+#webElem$
+#remDr$click()
 
 
 #rvest
-basepaginglink <- 'https://www.edc.dk/sog/?ejd-typer=1&antal=1000&side='
-endpageinglink <- '#lstsort'
-mainhousetag=".propertyitem__wrapper"
+#basepaginglink <- 'https://www.edc.dk/sog/?ejd-typer=1&antal=1000&side='
+#endpageinglink <- '#lstsort'
+#mainhousetag=".propertyitem__wrapper"
 mainhousetag=".propertyitem--list"
-totaldf = data.frame(matrix(ncol=14, nrow=0))
 housedfnames=initnames()
+totaldf = data.frame(matrix(ncol=14, nrow=0))
 colnames(totaldf) = housedfnames
+nnd = c(housedfnames[1],housedfnames[2],housedfnames[3],housedfnames[4],housedfnames[5],housedfnames[6],housedfnames[7],housedfnames[8])
 
-maxlimit=40
+
+maxlimit=39
 
 #testhouse = houselist[[4]]
 
 #rclient$navigate(startlink)
 
-for (counter in (1:maxlimit)) {
+for (counter in (12:maxlimit)) {
   #tmplink <- paste0(basepaginglink,counter,endpageinglink)
   tmplink <- x[counter]
-  rclient$navigate(tmplink)
+  remDr$navigate(tmplink)
   Sys.sleep(10)
   log_print(c("link: ",tmplink))
-  tmpsource <- rclient$getPageSource()
+  tmpsource <- remDr$getPageSource()
   househtml <- read_html(tmpsource[[1]])
   #househtml <- read_html(tmplink)
   houselist <- househtml %>% html_nodes(mainhousetag)
@@ -99,23 +120,31 @@ for (counter in (1:maxlimit)) {
     housedf$solgt=FALSE
     
     # get dealer
-    tryCatch({  totaldf <- rbind(totaldf,housedf) },
+    tryCatch({  
+      colnames(housedf) = housedfnames
+      colnames(totaldf) = housedfnames
+      totaldf <- rbind(totaldf,housedf) 
+      },
              warning = function(w) { print(c("Warning:",housedf$address)) },
              error = function(e) {print(c("Error:",housedf$address))} )
   }
+  #resfromdb=dbWriteTable(condb,"houses",totaldf)
+  lf <- log_open(tmp)
+  log_print(c("Wrote to db ",resfromdb))
+  
   #button=rclient$findElement(using = "class name","next")
   #button$clickElement()
   counter=counter+1
 }
-
+  
 # save dataframe to fnile - RDS-format
-saveRDS(nresdf,"firsbb.rds")
+saveRDS(totaldf,"edc.rds")
 
 
 # save dataframe to mysql - first time only
 
 
-dbWriteTable(condb,"mycars2",nresdfbu,overwrite=T)
+dbWriteTable(condb,"edc3",totaldf,overwrite=T)
 #dbWriteTable(con, "mtcars", datasets::mtcars, overwrite = TRUE)
 
 # get cars from db
@@ -150,12 +179,12 @@ getsagsnr <- function(house) {
 
 gethouselist <- function(house) {
     infolist = as.data.frame(matrix(nrow = 1, ncol = 8))
-    colnames(infolist) <- nnd
   tryCatch({
-      infolist <- house %>% html_nodes("table") %>% html_table() %>% as.data.frame()
+    infolistvalues <- house %>% html_nodes("td") %>% html_text()
+      #infolist <- house %>% html_nodes("td") %>% html_table() %>% as.data.frame()
       colnames(infolist) <- nnd
       log_print(c("RAW: ",infolist))
-      infolist <- as.data.frame(lapply(infolist, function(x) gsub("[^0-9]","",x)))
+      infolist <- as.data.frame(lapply(infolistvalues, function(x) gsub("[^0-9]","",x)))
     },
     error = function(e) { log_print(e) }
   )
